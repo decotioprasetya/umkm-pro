@@ -489,7 +489,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const bIdx = updatedBatches.findIndex(b => b.id === batch.id);
       updatedBatches[bIdx].currentQuantity -= take;
       if (newVariant && updatedBatches[bIdx].variants) {
-        const vIdx = updatedBatches[bIdx].variants!.findIndex(v => v.label === variantLabel);
+        // Fix: Use 'newVariant' instead of undefined 'variantLabel'
+        const vIdx = updatedBatches[bIdx].variants!.findIndex(v => v.label === newVariant);
         if (vIdx !== -1) updatedBatches[bIdx].variants![vIdx].quantity -= take;
       }
       needed -= take;
