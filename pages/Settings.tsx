@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { useApp } from '../store';
 import { Store, Sun, Moon, Info, Cloud, CloudOff, RefreshCw, LogIn } from 'lucide-react';
@@ -64,7 +63,8 @@ const Settings: React.FC<SettingsProps> = ({ onLoginClick }) => {
 
             {state.user && state.settings.useCloud && (
               <button 
-                onClick={syncLocalToCloud}
+                // Fix: Wrap syncLocalToCloud in an arrow function to prevent the MouseEvent from being passed as the 'silent' boolean parameter.
+                onClick={() => syncLocalToCloud(false)}
                 disabled={state.isSyncing}
                 className="w-full py-4 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all group"
               >
