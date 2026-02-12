@@ -21,9 +21,11 @@ export const supabase = (supabaseUrl && supabaseAnonKey)
       },
       from: () => ({
         select: () => ({
-          order: () => Promise.resolve({ data: [], error: null })
+          order: () => Promise.resolve({ data: [], error: null }),
+          limit: () => Promise.resolve({ data: [], error: null })
         }),
         insert: () => Promise.resolve({ data: null, error: null }),
+        update: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }),
         upsert: () => Promise.resolve({ data: null, error: null }),
         delete: () => ({ eq: () => Promise.resolve({ data: null, error: null }) }),
       })
