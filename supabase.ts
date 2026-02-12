@@ -1,7 +1,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 
-// PENTING: Masukkan URL dan Anon Key dari dashboard Supabase Anda di sini
+// Konfigurasi Supabase Baru
 const supabaseUrl = 'https://rgklmxqdftmlbdnbgxcm.supabase.co'; 
 const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJna2xteHFkZnRtbGJkbmJneGNtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4NjM5ODEsImV4cCI6MjA4NjQzOTk4MX0.fzvtxUFE58UYTv4yKYqGNvzS1fPOKPWUL-yFQrRjpWo';
 
