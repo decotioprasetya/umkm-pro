@@ -1,5 +1,5 @@
 
-import { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase, isCloudReady } from './supabase';
 import { 
   AppState, Batch, ProductionRecord, SaleRecord, Transaction, 
@@ -40,6 +40,7 @@ interface AppContextType {
   deleteLoan: (id: string) => Promise<void>;
   updateSettings: (settings: Partial<AppSettings>) => void;
   syncLocalToCloud: () => Promise<void>;
+  fetchFromCloud: () => Promise<void>;
   signIn: (email: string, pass: string) => Promise<string | null>;
   signUp: (email: string, pass: string) => Promise<string | null>;
   logout: () => Promise<void>;
@@ -48,9 +49,9 @@ interface AppContextType {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 const STORAGE_KEY = 'umkm_pro_session_data';
 
+// Added React import to satisfy TypeScript namespace requirements
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AppState>(() => {
-    // Menggunakan sessionStorage agar data otomatis terhapus saat tab ditutup
     const saved = sessionStorage.getItem(STORAGE_KEY);
     const initialData = saved ? JSON.parse(saved) : {
       batches: [],
@@ -65,14 +66,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         theme: 'light',
         supabaseUrl: '',
         supabaseAnonKey: '',
-        useCloud: false
+        useCloud: true // Default ke true jika ingin cloud-first
       }
     };
     return { ...initialData, isSyncing: false, user: null };
   });
 
+  const fetchFromCloud = useCallback(async () => {
+    if (!isCloudReady || !state.user) return;
+    setState(prev => ({ ...prev, isSyncing: true }));
+    try {
+      const [
+        { data: b }, { data: p }, { data: u }, 
+        { data: s }, { data: d }, { data: l }, { data: t }
+      ] = await Promise.all([
+        supabase.from('batches').select('*'),
+        supabase.from('productions').select('*'),
+        supabase.from('production_usages').select('*'),
+        supabase.from('sales').select('*'),
+        supabase.from('dp_orders').select('*'),
+        supabase.from('loans').select('*'),
+        supabase.from('transactions').select('*')
+      ]);
+
+      setState(prev => ({
+        ...prev,
+        batches: b || [],
+        productions: p || [],
+        productionUsages: u || [],
+        sales: s || [],
+        dpOrders: d || [],
+        loans: l || [],
+        transactions: t || [],
+        isSyncing: false
+      }));
+    } catch (err) {
+      console.error("Fetch error:", err);
+      setState(prev => ({ ...prev, isSyncing: false }));
+    }
+  }, [state.user]);
+
   useEffect(() => {
-    // Menyimpan ke sessionStorage (Data hilang saat tab ditutup)
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, isSyncing: false, user: null }));
     if (state.settings.theme === 'dark') {
       document.documentElement.classList.add('dark');
@@ -83,32 +117,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     if (!isCloudReady) return;
-    (supabase.auth as any).getSession().then(({ data }: any) => {
-      setState(prev => ({ ...prev, user: data?.session?.user ?? null }));
+    
+    // Auth Listener
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const user = session?.user ?? null;
+      setState(prev => ({ ...prev, user }));
+      // Jika user baru login, tarik data dari cloud
+      if (user) {
+        fetchFromCloud();
+      }
     });
-    const { data: { subscription } } = (supabase.auth as any).onAuthStateChange((_event: any, session: any) => {
-      setState(prev => ({ ...prev, user: session?.user ?? null }));
+
+    // Ambil session awal
+    supabase.auth.getSession().then(({ data }) => {
+      if (data?.session?.user) {
+        setState(prev => ({ ...prev, user: data.session.user }));
+        fetchFromCloud();
+      }
     });
+
     return () => subscription.unsubscribe();
-  }, []);
+  }, [fetchFromCloud]);
 
   const signIn = async (email: string, pass: string) => {
     if (!isCloudReady) return "Konfigurasi Cloud belum lengkap.";
-    const { error } = await (supabase.auth as any).signInWithPassword({ email, password: pass });
+    const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
     if (error) return error.message;
     return null;
   };
 
   const signUp = async (email: string, pass: string) => {
     if (!isCloudReady) return "Konfigurasi Cloud belum lengkap.";
-    const { error } = await (supabase.auth as any).signUp({ email, password: pass });
+    const { error } = await supabase.auth.signUp({ email, password: pass });
     if (error) return error.message;
     return null;
   };
 
   const logout = async () => {
-    if (isCloudReady) await (supabase.auth as any).signOut();
-    setState(prev => ({ ...prev, user: null }));
+    if (isCloudReady) await supabase.auth.signOut();
+    setState(prev => ({ 
+      ...prev, 
+      user: null,
+      batches: [],
+      productions: [],
+      productionUsages: [],
+      sales: [],
+      dpOrders: [],
+      loans: [],
+      transactions: []
+    }));
+    sessionStorage.removeItem(STORAGE_KEY);
   };
 
   const updateSettings = (newSettings: Partial<AppSettings>) => {
@@ -119,6 +177,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!isCloudReady || !state.user) return alert("Harus login untuk sinkronisasi cloud.");
     setState(prev => ({ ...prev, isSyncing: true }));
     try {
+      // Upsert semua data lokal ke cloud
       await Promise.all([
         supabase.from('batches').upsert(state.batches.map(i => ({...i, user_id: state.user.id}))),
         supabase.from('productions').upsert(state.productions.map(i => ({...i, user_id: state.user.id}))),
@@ -128,7 +187,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         supabase.from('loans').upsert(state.loans.map(i => ({...i, user_id: state.user.id}))),
         supabase.from('transactions').upsert(state.transactions.map(i => ({...i, user_id: state.user.id})))
       ]);
-      alert("Sinkronisasi Berhasil!");
+      alert("Sinkronisasi Keluar Berhasil!");
     } catch (e) {
       alert("Gagal Sinkronisasi.");
     } finally {
@@ -607,8 +666,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateDPOrder = async (id: string, data: Partial<DPOrder>) => {
     const updatedOrders = state.dpOrders.map(o => o.id === id ? { ...o, ...data } : o);
-    const updatedOrder = updatedOrders.find(o => o.id === id);
-    let updatedTransactions = [...state.transactions];
+    const updatedOrder = updatedOrders.find(o => o.id === id);    let updatedTransactions = [...state.transactions];
     if (updatedOrder) {
       updatedTransactions = updatedTransactions.map(t => {
         if (t.relatedId === id && t.category === TransactionCategory.DEPOSIT) {
@@ -850,7 +908,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider value={{ 
       state, addBatch, updateBatch, deleteBatch, runProduction, updateProduction, completeProduction,
       deleteProduction, runSale, updateSale, deleteSale, addManualTransaction, updateTransaction, 
-      deleteTransaction, transferFunds, updateSettings, syncLocalToCloud,
+      deleteTransaction, transferFunds, updateSettings, syncLocalToCloud, fetchFromCloud,
       signIn, signUp, logout,
       addDPOrder, updateDPOrder, completeDPOrder, cancelDPOrder, deleteDPOrder,
       addLoan, updateLoan, repayLoan, deleteLoan
