@@ -138,4 +138,5 @@ export interface AppState {
   settings: AppSettings;
   isSyncing: boolean;
   user: any | null;
+  lastSyncTime?: number;
 }
