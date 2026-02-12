@@ -2,8 +2,8 @@
 import { createClient } from '@supabase/supabase-js';
 
 // Konfigurasi Supabase Baru
-const supabaseUrl = 'https://rgklmxqdftmlbdnbgxcm.supabase.co'; 
-const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJna2xteHFkZnRtbGJkbmJneGNtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4NjM5ODEsImV4cCI6MjA4NjQzOTk4MX0.fzvtxUFE58UYTv4yKYqGNvzS1fPOKPWUL-yFQrRjpWo';
+const supabaseUrl = 'https://dixhqgsglgoqsqvpvbwa.supabase.co'; 
+const supabaseAnonKey = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRpeGhxZ3NnbGdvcXNxdnB2YndhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzA4ODE3ODMsImV4cCI6MjA4NjQ1Nzc4M30.Efv9Ogtk4xWrLDZwwTdsOSPQvED0dWT_Orc1rBC2EzA';
 
 /**
  * Mencegah error "supabaseUrl is required" saat runtime.
