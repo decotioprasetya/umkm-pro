@@ -1,3 +1,4 @@
+
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase, isCloudReady } from './supabase';
 import { 
@@ -67,6 +68,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         useCloud: true 
       }
     };
+    // Ensure user is null on refresh to trigger proper cloud fetch
     return { ...initialData, isSyncing: false, user: null };
   });
 
@@ -75,35 +77,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     stateRef.current = state;
   }, [state]);
 
-  // FITUR UTAMA: Auto Sinkron Cloud saat ada perubahan data state
-  useEffect(() => {
-    const syncData = async () => {
-      // Hanya jalan jika Cloud Ready, User Login, dan tidak sedang dalam proses sync
-      if (!isCloudReady || !state.user || !state.settings.useCloud || state.isSyncing) return;
+  // ================= AUTO SYNC CLOUD =================
+const autoSyncTimeout = useRef<NodeJS.Timeout | null>(null);
 
-      try {
-        await Promise.all([
-          supabase.from('batches').upsert(state.batches.map(i => ({...i, user_id: state.user!.id}))),
-          supabase.from('productions').upsert(state.productions.map(i => ({...i, user_id: state.user!.id}))),
-          supabase.from('production_usages').upsert(state.productionUsages.map(i => ({...i, user_id: state.user!.id}))),
-          supabase.from('sales').upsert(state.sales.map(i => ({...i, user_id: state.user!.id}))),
-          supabase.from('dp_orders').upsert(state.dpOrders.map(i => ({...i, user_id: state.user!.id}))),
-          supabase.from('loans').upsert(state.loans.map(i => ({...i, user_id: state.user!.id}))),
-          supabase.from('transactions').upsert(state.transactions.map(i => ({...i, user_id: state.user!.id})))
-        ]);
-        console.log("Auto-sync success");
-      } catch (e) {
-        console.error("Auto-sync error:", e);
-      }
-    };
+const triggerAutoSync = useCallback(() => {
+  if (!isCloudReady) return;
+  if (!stateRef.current.user) return;
+  if (!stateRef.current.settings.useCloud) return;
+  if (stateRef.current.isSyncing) return;
 
-    // Debounce sinkronisasi agar tidak spam API setiap ketikan
-    const timeout = setTimeout(() => {
-      syncData();
-    }, 2000); 
+  if (autoSyncTimeout.current) {
+    clearTimeout(autoSyncTimeout.current);
+  }
 
-    return () => clearTimeout(timeout);
-  }, [state.batches, state.productions, state.productionUsages, state.sales, state.dpOrders, state.loans, state.transactions]);
+  autoSyncTimeout.current = setTimeout(() => {
+    syncLocalToCloud();
+  }, 2000);
+}, []);
+
 
   const fetchFromCloud = useCallback(async () => {
     if (!isCloudReady || !stateRef.current.user) return;
@@ -149,6 +140,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  // Sync to SessionStorage and Theme
   useEffect(() => {
     const { user, isSyncing, ...persistentState } = state;
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(persistentState));
@@ -160,12 +152,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, [state.batches, state.productions, state.productionUsages, state.sales, state.dpOrders, state.loans, state.transactions, state.settings]);
 
+  // Handle Auth Changes
   useEffect(() => {
     if (!isCloudReady) return;
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const user = session?.user ?? null;
       setState(prev => {
+        // Only update if user actually changed to avoid blinking
         if (prev.user?.id === user?.id) return prev;
         return { ...prev, user };
       });
@@ -180,6 +174,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => subscription.unsubscribe();
   }, []);
 
+  // Fetch data when user is ready
   useEffect(() => {
     if (state.user) {
       fetchFromCloud();
@@ -258,13 +253,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           theme: state.settings.theme,
           updated_at: new Date().toISOString()
         }),
-        supabase.from('batches').upsert(state.batches.map(i => ({...i, user_id: state.user!.id}))),
-        supabase.from('productions').upsert(state.productions.map(i => ({...i, user_id: state.user!.id}))),
-        supabase.from('production_usages').upsert(state.productionUsages.map(i => ({...i, user_id: state.user!.id}))),
-        supabase.from('sales').upsert(state.sales.map(i => ({...i, user_id: state.user!.id}))),
-        supabase.from('dp_orders').upsert(state.dpOrders.map(i => ({...i, user_id: state.user!.id}))),
-        supabase.from('loans').upsert(state.loans.map(i => ({...i, user_id: state.user!.id}))),
-        supabase.from('transactions').upsert(state.transactions.map(i => ({...i, user_id: state.user!.id})))
+        supabase.from('batches').upsert(state.batches.map(i => ({...i, user_id: state.user.id}))),
+        supabase.from('productions').upsert(state.productions.map(i => ({...i, user_id: state.user.id}))),
+        supabase.from('production_usages').upsert(state.productionUsages.map(i => ({...i, user_id: state.user.id}))),
+        supabase.from('sales').upsert(state.sales.map(i => ({...i, user_id: state.user.id}))),
+        supabase.from('dp_orders').upsert(state.dpOrders.map(i => ({...i, user_id: state.user.id}))),
+        supabase.from('loans').upsert(state.loans.map(i => ({...i, user_id: state.user.id}))),
+        supabase.from('transactions').upsert(state.transactions.map(i => ({...i, user_id: state.user.id})))
       ]);
       alert("Sinkronisasi Berhasil!");
     } catch (e) {
@@ -275,8 +270,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // --- SEMUA LOGIKA DATA DIBAWAH TETAP SAMA (TIDAK ADA YANG DIHAPUS) ---
-
   const addBatch = async (data: Omit<Batch, 'id' | 'createdAt'>, customDate?: number, paymentMethod: 'CASH' | 'BANK' = 'CASH') => {
     const timestamp = customDate || Date.now();
     const newBatch: Batch = { ...data, id: crypto.randomUUID(), createdAt: timestamp };
@@ -285,7 +278,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amount: data.buyPrice * data.initialQuantity, description: `Beli Stok: ${data.productName}`,
       createdAt: timestamp, relatedId: newBatch.id, paymentMethod
     };
+
+    // Optimistic UI Update
     setState(prev => ({ ...prev, batches: [...prev.batches, newBatch], transactions: [...prev.transactions, newTransaction] }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('batches').insert({...newBatch, user_id: state.user.id}),
+          supabase.from('transactions').insert({...newTransaction, user_id: state.user.id})
+        ]);
+      } catch (e) {
+        console.error("Batch cloud sync error:", e);
+      }
+    }
   };
 
   const updateBatch = async (id: string, data: Partial<Batch>) => {
@@ -318,20 +324,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return t;
       });
     }
+
     setState(prev => ({ ...prev, batches: updatedBatches, transactions: updatedTransactions }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('batches').update({ ...data }).eq('id', id),
+          supabase.from('transactions').upsert(updatedTransactions.filter(t => t.relatedId === id).map(t => ({...t, user_id: state.user.id})))
+        ]);
+      } catch (e) {
+        console.error("Batch update cloud error:", e);
+      }
+    }
   };
 
   const deleteBatch = async (id: string) => {
     const isUsed = state.productionUsages.some(u => u.batchId === id);
     if (isUsed) return alert("STOK INI SUDAH PERNAH DIGUNAKAN.");
-
-    // Hapus di cloud secara manual untuk delete (upsert tidak menangani delete)
-    if (isCloudReady && state.user && state.settings.useCloud) {
-       await supabase.from('batches').delete().eq('id', id);
-       await supabase.from('transactions').delete().eq('relatedId', id);
-    }
     
     setState(prev => ({ ...prev, batches: prev.batches.filter(b => b.id !== id), transactions: prev.transactions.filter(t => t.relatedId !== id) }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('batches').delete().eq('id', id),
+          supabase.from('transactions').delete().eq('relatedId', id)
+        ]);
+      } catch (e) {
+        console.error("Batch delete cloud error:", e);
+      }
+    }
   };
 
   const runProduction = async (productName: string, quantity: number, ingredients: { productName: string, quantity: number }[], operationalCosts: { amount: number, description: string, paymentMethod: 'CASH' | 'BANK' }[], customDate?: number) => {
@@ -340,8 +363,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const totalOpCost = operationalCosts.reduce((sum, c) => sum + c.amount, 0);
     
     const production: ProductionRecord = { 
-      id: productionId, outputProductName: productName, outputQuantity: quantity, 
-      totalHPP: totalOpCost, createdAt: timestamp, status: ProductionStatus.IN_PROGRESS, ingredients
+      id: productionId, 
+      outputProductName: productName, 
+      outputQuantity: quantity, 
+      totalHPP: totalOpCost, 
+      createdAt: timestamp, 
+      status: ProductionStatus.IN_PROGRESS,
+      ingredients: ingredients
     };
     
     const newTx = operationalCosts.filter(c => c.amount > 0).map(c => ({
@@ -349,11 +377,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       amount: c.amount, description: `PRODUKSI ${productName} (${c.description})`, createdAt: timestamp, relatedId: productionId, paymentMethod: c.paymentMethod
     }));
 
-    setState(prev => ({ ...prev, productions: [...prev.productions, production], transactions: [...prev.transactions, ...newTx] }));
+    setState(prev => ({ 
+      ...prev, 
+      productions: [...prev.productions, production], 
+      transactions: [...prev.transactions, ...newTx] 
+    }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('productions').insert({...production, user_id: state.user.id}),
+          supabase.from('transactions').insert(newTx.map(i => ({...i, user_id: state.user.id})))
+        ]);
+      } catch (e) {
+        console.error("Production cloud sync error:", e);
+      }
+    }
   };
 
   const updateProduction = async (id: string, data: Partial<ProductionRecord>) => {
-    setState(prev => ({ ...prev, productions: prev.productions.map(p => p.id === id ? { ...p, ...data } : p) }));
+    const updatedProductions = state.productions.map(p => p.id === id ? { ...p, ...data } : p);
+    setState(prev => ({ ...prev, productions: updatedProductions }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await supabase.from('productions').update({ ...data }).eq('id', id);
+      } catch (e) {
+        console.error("Production update cloud error:", e);
+      }
+    }
   };
 
   const completeProduction = async (id: string, actualQuantity: number, actualIngredients: ProductionIngredient[], variants?: BatchVariant[]) => {
@@ -368,9 +420,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     for (const ingredient of actualIngredients) {
       let needed = ingredient.quantity;
       if (needed <= 0) continue;
+
       const relevant = updatedBatches.filter(b => b.productName === ingredient.productName && b.stockType === StockType.FOR_PRODUCTION && b.currentQuantity > 0).sort((a, b) => a.createdAt - b.createdAt);
+      
       const totalAvail = relevant.reduce((s, b) => s + b.currentQuantity, 0);
-      if (totalAvail < needed) throw new Error(`Stok ${ingredient.productName} tidak mencukupi.`);
+      if (totalAvail < needed) {
+        throw new Error(`Stok ${ingredient.productName} tidak mencukupi. Tersedia: ${totalAvail}, Dibutuhkan: ${needed}`);
+      }
 
       for (const batch of relevant) {
         if (needed <= 0) break;
@@ -385,30 +441,63 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const finalTotalHPP = prod.totalHPP + totalMaterialCost;
     const unitPrice = actualQuantity > 0 ? (finalTotalHPP / actualQuantity) : 0;
-    const resultBatch: Batch = { id: crypto.randomUUID(), productName: prod.outputProductName, initialQuantity: actualQuantity, currentQuantity: actualQuantity, buyPrice: unitPrice, stockType: StockType.FOR_SALE, createdAt: timestamp, variants: variants || [] };
+
+    const resultBatch: Batch = { 
+      id: crypto.randomUUID(), 
+      productName: prod.outputProductName, 
+      initialQuantity: actualQuantity, 
+      currentQuantity: actualQuantity, 
+      buyPrice: unitPrice, 
+      stockType: StockType.FOR_SALE, 
+      createdAt: timestamp,
+      variants: variants || []
+    };
+
+    const updatedProductions = state.productions.map(p => 
+      p.id === id ? { 
+        ...p, 
+        status: ProductionStatus.COMPLETED, 
+        completedAt: timestamp, 
+        batchIdCreated: resultBatch.id,
+        outputQuantity: actualQuantity,
+        totalHPP: finalTotalHPP
+      } : p
+    );
 
     setState(prev => ({
       ...prev,
       batches: [...updatedBatches, resultBatch],
-      productions: prev.productions.map(p => p.id === id ? { ...p, status: ProductionStatus.COMPLETED, completedAt: timestamp, batchIdCreated: resultBatch.id, outputQuantity: actualQuantity, totalHPP: finalTotalHPP } : p),
+      productions: updatedProductions,
       productionUsages: [...prev.productionUsages, ...usages]
     }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('batches').upsert(updatedBatches.map(i => ({...i, user_id: state.user.id}))),
+          supabase.from('productions').update({ 
+            status: ProductionStatus.COMPLETED, 
+            completedAt: timestamp, 
+            batchIdCreated: resultBatch.id,
+            outputQuantity: actualQuantity,
+            totalHPP: finalTotalHPP
+          }).eq('id', id),
+          supabase.from('production_usages').insert(usages.map(i => ({...i, user_id: state.user.id}))),
+          supabase.from('batches').insert({ ...resultBatch, user_id: state.user.id })
+        ]);
+      } catch (e) {
+        console.error("Production complete cloud sync error:", e);
+      }
+    }
   };
 
   const deleteProduction = async (id: string) => {
     const prod = state.productions.find(p => p.id === id);
     if (!prod) return;
+    
     if (prod.status === ProductionStatus.COMPLETED && prod.batchIdCreated) {
       const resultBatch = state.batches.find(b => b.id === prod.batchIdCreated);
       if (resultBatch && resultBatch.currentQuantity < resultBatch.initialQuantity) return alert("PRODUK SUDAH TERJUAL.");
-    }
-
-    // Manual cloud delete for nested references
-    if (isCloudReady && state.user && state.settings.useCloud) {
-        await supabase.from('productions').delete().eq('id', id);
-        await supabase.from('production_usages').delete().eq('productionId', id);
-        await supabase.from('transactions').delete().eq('relatedId', id);
-        if (prod.batchIdCreated) await supabase.from('batches').delete().eq('id', prod.batchIdCreated);
     }
 
     const prodUsages = state.productionUsages.filter(u => u.productionId === id);
@@ -418,13 +507,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (idx !== -1) updatedBatches[idx].currentQuantity += usage.quantityUsed;
     });
 
+    if (prod.batchIdCreated) {
+      updatedBatches = updatedBatches.filter(b => b.id !== prod.batchIdCreated);
+    }
+
     setState(prev => ({ 
       ...prev, 
-      batches: prod.batchIdCreated ? updatedBatches.filter(b => b.id !== prod.batchIdCreated) : updatedBatches, 
+      batches: updatedBatches, 
       productions: prev.productions.filter(p => p.id !== id), 
       productionUsages: prev.productionUsages.filter(u => u.productionId !== id), 
       transactions: prev.transactions.filter(t => t.relatedId !== id) 
     }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('batches').upsert(updatedBatches.map(i => ({...i, user_id: state.user.id}))),
+          supabase.from('productions').delete().eq('id', id),
+          supabase.from('production_usages').delete().eq('productionId', id),
+          supabase.from('transactions').delete().eq('relatedId', id)
+        ]);
+      } catch (e) {
+        console.error("Production delete cloud error:", e);
+      }
+    }
   };
 
   const runSale = async (productName: string, quantity: number, pricePerUnit: number, customDate?: number, variantLabel?: string, paymentMethod: 'CASH' | 'BANK' = 'CASH') => {
@@ -432,12 +538,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let needed = quantity;
     let totalCOGS = 0;
     let updatedBatches = [...state.batches];
-    const relevant = updatedBatches.filter(b => b.productName === productName && b.stockType === StockType.FOR_SALE && b.currentQuantity > 0).sort((a, b) => a.createdAt - b.createdAt);
+    
+    const relevant = updatedBatches.filter(b => 
+      b.productName === productName && 
+      b.stockType === StockType.FOR_SALE && 
+      b.currentQuantity > 0
+    ).sort((a, b) => a.createdAt - b.createdAt);
 
     for (const batch of relevant) {
       if (needed <= 0) break;
       let availableInThisBatch = batch.currentQuantity;
-      if (variantLabel && batch.variants) {
+      if (variantLabel && batch.variants && batch.variants.length > 0) {
         const vIdx = batch.variants.findIndex(v => v.label === variantLabel);
         if (vIdx === -1 || batch.variants[vIdx].quantity <= 0) continue;
         availableInThisBatch = batch.variants[vIdx].quantity;
@@ -455,26 +566,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const saleId = crypto.randomUUID();
-    const sale: SaleRecord = { id: saleId, productName, variantLabel, quantity, salePrice: pricePerUnit, totalRevenue: quantity * pricePerUnit, totalCOGS, createdAt: timestamp };
-    const tx: Transaction = { id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.SALES, amount: sale.totalRevenue, description: `PENJUALAN: ${productName}${variantLabel ? ` (${variantLabel})` : ''}`, createdAt: timestamp, relatedId: saleId, paymentMethod };
+    const sale: SaleRecord = { 
+      id: saleId, productName, variantLabel, quantity, salePrice: pricePerUnit, totalRevenue: quantity * pricePerUnit, totalCOGS, createdAt: timestamp 
+    };
+    const tx: Transaction = { 
+      id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.SALES, 
+      amount: sale.totalRevenue, description: `PENJUALAN: ${productName}${variantLabel ? ` (${variantLabel})` : ''}`, 
+      createdAt: timestamp, relatedId: saleId, paymentMethod
+    };
 
     setState(prev => ({ ...prev, batches: updatedBatches, sales: [...prev.sales, sale], transactions: [...prev.transactions, tx] }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('batches').upsert(updatedBatches.map(i => ({...i, user_id: state.user.id}))),
+          supabase.from('sales').insert({...sale, user_id: state.user.id}),
+          supabase.from('transactions').insert({...tx, user_id: state.user.id})
+        ]);
+      } catch (e) {
+        console.error("Sale cloud sync error:", e);
+      }
+    }
   };
 
   const updateSale = async (id: string, data: Partial<SaleRecord>) => {
     const oldSale = state.sales.find(s => s.id === id);
     if (!oldSale) return;
+
     let updatedBatches = [...state.batches];
 
-    // Restore stock logic
     let toRestore = oldSale.quantity;
-    const sameProductBatches = updatedBatches.filter(b => b.productName === oldSale.productName && b.stockType === StockType.FOR_SALE).sort((a, b) => b.createdAt - a.createdAt); 
+    const sameProductBatches = updatedBatches
+      .filter(b => b.productName === oldSale.productName && b.stockType === StockType.FOR_SALE)
+      .sort((a, b) => b.createdAt - a.createdAt); 
+
     for (const batch of sameProductBatches) {
       if (toRestore <= 0) break;
       const bIdx = updatedBatches.findIndex(b => b.id === batch.id);
+      
       if (oldSale.variantLabel && updatedBatches[bIdx].variants) {
         const vIdx = updatedBatches[bIdx].variants!.findIndex(v => v.label === oldSale.variantLabel);
-        if (vIdx !== -1) { updatedBatches[bIdx].variants![vIdx].quantity += toRestore; updatedBatches[bIdx].currentQuantity += toRestore; toRestore = 0; break; }
+        if (vIdx !== -1) {
+          updatedBatches[bIdx].variants![vIdx].quantity += toRestore;
+          updatedBatches[bIdx].currentQuantity += toRestore;
+          toRestore = 0;
+          break;
+        }
       } else {
         const space = batch.initialQuantity - batch.currentQuantity;
         const amount = Math.min(space, toRestore);
@@ -485,57 +623,122 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const newQty = data.quantity ?? oldSale.quantity;
     const newPrice = data.salePrice ?? oldSale.salePrice;
+    const newVariant = data.variantLabel ?? oldSale.variantLabel;
+    const newProduct = data.productName ?? oldSale.productName;
     const newTotalRevenue = newQty * newPrice;
+    
     let needed = newQty;
     let totalCOGS = 0;
-    const relevantBatches = updatedBatches.filter(b => b.productName === (data.productName || oldSale.productName) && b.stockType === StockType.FOR_SALE && b.currentQuantity > 0).sort((a, b) => a.createdAt - b.createdAt); 
+    const relevantBatches = updatedBatches
+      .filter(b => b.productName === newProduct && b.stockType === StockType.FOR_SALE && b.currentQuantity > 0)
+      .sort((a, b) => a.createdAt - b.createdAt); 
+
+    const totalAvail = relevantBatches.reduce((sum, b) => {
+      if (newVariant && b.variants) {
+        return sum + (b.variants.find(v => v.label === newVariant)?.quantity || 0);
+      }
+      return sum + b.currentQuantity;
+    }, 0);
+
+    if (needed > totalAvail) {
+      alert(`Stok tidak mencukupi untuk jumlah editan baru. Tersedia: ${totalAvail} Unit`);
+      return;
+    }
 
     for (const batch of relevantBatches) {
       if (needed <= 0) break;
       let availableInThisBatch = batch.currentQuantity;
-      if ((data.variantLabel || oldSale.variantLabel) && batch.variants) {
-        const v = batch.variants.find(v => v.label === (data.variantLabel || oldSale.variantLabel));
+      if (newVariant && batch.variants) {
+        const v = batch.variants.find(v => v.label === newVariant);
         if (!v || v.quantity <= 0) continue;
         availableInThisBatch = v.quantity;
       }
+
       const take = Math.min(availableInThisBatch, needed);
+      if (take <= 0) continue;
+
       const bIdx = updatedBatches.findIndex(b => b.id === batch.id);
       updatedBatches[bIdx].currentQuantity -= take;
-      if ((data.variantLabel || oldSale.variantLabel) && updatedBatches[bIdx].variants) {
-        const vIdx = updatedBatches[bIdx].variants!.findIndex(v => v.label === (data.variantLabel || oldSale.variantLabel));
+      if (newVariant && updatedBatches[bIdx].variants) {
+        const vIdx = updatedBatches[bIdx].variants!.findIndex(v => v.label === newVariant);
         if (vIdx !== -1) updatedBatches[bIdx].variants![vIdx].quantity -= take;
       }
       needed -= take;
       totalCOGS += take * batch.buyPrice;
     }
 
-    const updatedSale = { ...oldSale, ...data, totalCOGS, totalRevenue: newTotalRevenue };
+    const updatedSale: SaleRecord = { 
+      ...oldSale, 
+      ...data, 
+      totalCOGS, 
+      quantity: newQty, 
+      salePrice: newPrice, 
+      totalRevenue: newTotalRevenue 
+    };
+    
+    const updatedSales = state.sales.map(s => s.id === id ? updatedSale : s);
+    const updatedTransactions = state.transactions.map(t => {
+      if (t.relatedId === id && t.category === TransactionCategory.SALES) {
+        return {
+          ...t,
+          amount: newTotalRevenue,
+          description: `PENJUALAN: ${updatedSale.productName}${updatedSale.variantLabel ? ` (${updatedSale.variantLabel})` : ''}`,
+          createdAt: updatedSale.createdAt || t.createdAt
+        };
+      }
+      if (oldSale.related_order_id && t.relatedId === oldSale.related_order_id && t.category === TransactionCategory.SALES && t.description.includes("PELUNASAN SISA ORDER")) {
+         const order = state.dpOrders.find(o => o.id === oldSale.related_order_id);
+         if (order) {
+            const newRemainingAmount = newTotalRevenue - order.dpAmount;
+            return {
+              ...t,
+              amount: newRemainingAmount,
+              description: `PELUNASAN SISA ORDER: ${order.customerName} (${updatedSale.productName})`
+            };
+         }
+      }
+      return t;
+    });
+
     setState(prev => ({ 
       ...prev, 
       batches: updatedBatches, 
-      sales: prev.sales.map(s => s.id === id ? updatedSale : s),
-      transactions: prev.transactions.map(t => t.relatedId === id ? { ...t, amount: newTotalRevenue, description: `PENJUALAN: ${updatedSale.productName}${updatedSale.variantLabel ? ` (${updatedSale.variantLabel})` : ''}` } : t)
+      sales: updatedSales, 
+      transactions: updatedTransactions 
     }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('batches').upsert(updatedBatches.map(i => ({...i, user_id: state.user.id}))),
+          supabase.from('sales').update({ ...updatedSale }).eq('id', id),
+          supabase.from('transactions').upsert(updatedTransactions.filter(t => t.relatedId === id || (oldSale.related_order_id && t.relatedId === oldSale.related_order_id)).map(t => ({...t, user_id: state.user.id})))
+        ]);
+      } catch (e) {
+        console.error("Sale update cloud error:", e);
+      }
+    }
   };
 
   const deleteSale = async (id: string) => {
     const sale = state.sales.find(s => s.id === id);
     if (!sale) return;
 
-    if (isCloudReady && state.user && state.settings.useCloud) {
-       await supabase.from('sales').delete().eq('id', id);
-       await supabase.from('transactions').delete().eq('relatedId', id);
-    }
-
     let updatedBatches = [...state.batches];
     let toRestore = sale.quantity;
     const sameItems = updatedBatches.filter(b => b.productName === sale.productName && b.stockType === StockType.FOR_SALE).sort((a, b) => b.createdAt - a.createdAt);
+    
     for (const batch of sameItems) {
       if (toRestore <= 0) break;
       const bIdx = updatedBatches.findIndex(b => b.id === batch.id);
       if (sale.variantLabel && updatedBatches[bIdx].variants) {
         const vIdx = updatedBatches[bIdx].variants!.findIndex(v => v.label === sale.variantLabel);
-        if (vIdx !== -1) { updatedBatches[bIdx].variants![vIdx].quantity += toRestore; updatedBatches[bIdx].currentQuantity += toRestore; toRestore = 0; break; }
+        if (vIdx !== -1) {
+            updatedBatches[bIdx].variants![vIdx].quantity += toRestore;
+            updatedBatches[bIdx].currentQuantity += toRestore;
+            toRestore = 0;
+            break;
+        }
       }
       const space = batch.initialQuantity - batch.currentQuantity;
       const amount = Math.min(space, toRestore);
@@ -543,22 +746,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       toRestore -= amount;
     }
 
-    setState(prev => ({ ...prev, batches: updatedBatches, sales: prev.sales.filter(s => s.id !== id), transactions: prev.transactions.filter(t => t.relatedId !== id) }));
+    let updatedOrders = [...state.dpOrders];
+    let updatedTransactions = [...state.transactions];
+
+    if (sale.related_order_id) {
+      const orderIdx = updatedOrders.findIndex(o => o.id === sale.related_order_id);
+      if (orderIdx !== -1) {
+        updatedOrders[orderIdx] = { ...updatedOrders[orderIdx], status: DPStatus.PENDING, completedAt: undefined };
+        updatedTransactions = updatedTransactions.filter(t => !(t.relatedId === sale.related_order_id && t.description.includes("PELUNASAN SISA ORDER")));
+        updatedTransactions = updatedTransactions.map(t => (t.relatedId === sale.related_order_id && t.category === TransactionCategory.SALES && t.description.includes("PELUNASAN DP")) ? { ...t, category: TransactionCategory.DEPOSIT, description: `DP ORDER: ${updatedOrders[orderIdx].customerName} (${updatedOrders[orderIdx].productName})` } : t);
+      }
+    }
+
+    setState(prev => ({ ...prev, batches: updatedBatches, sales: prev.sales.filter(s => s.id !== id), dpOrders: updatedOrders, transactions: updatedTransactions }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('batches').upsert(updatedBatches.map(i => ({...i, user_id: state.user.id}))),
+          supabase.from('sales').delete().eq('id', id),
+          supabase.from('dp_orders').update({ status: DPStatus.PENDING, completedAt: null }).eq('id', sale.related_order_id || ''),
+          supabase.from('transactions').upsert(updatedTransactions.map(t => ({...t, user_id: state.user.id})))
+        ]);
+      } catch (e) {
+        console.error("Sale delete cloud error:", e);
+      }
+    }
   };
 
   const addDPOrder = async (data: Omit<DPOrder, 'id' | 'createdAt' | 'status'>, customDate?: number, paymentMethod: 'CASH' | 'BANK' = 'CASH') => {
     const timestamp = customDate || Date.now();
     const newOrder: DPOrder = { ...data, id: crypto.randomUUID(), createdAt: timestamp, status: DPStatus.PENDING };
-    const tx: Transaction = { id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.DEPOSIT, amount: data.dpAmount, description: `DP ORDER: ${data.customerName} (${data.productName})`, createdAt: timestamp, relatedId: newOrder.id, paymentMethod };
+    const tx: Transaction = { 
+      id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.DEPOSIT, 
+      amount: data.dpAmount, description: `DP ORDER: ${data.customerName} (${data.productName})`, 
+      createdAt: timestamp, relatedId: newOrder.id, paymentMethod
+    };
+    
     setState(prev => ({ ...prev, dpOrders: [...prev.dpOrders, newOrder], transactions: [...prev.transactions, tx] }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('dp_orders').insert({...newOrder, user_id: state.user.id}),
+          supabase.from('transactions').insert({...tx, user_id: state.user.id})
+        ]);
+      } catch (e) {
+        console.error("DP cloud sync error:", e);
+      }
+    }
   };
 
   const updateDPOrder = async (id: string, data: Partial<DPOrder>) => {
-    setState(prev => ({
-      ...prev,
-      dpOrders: prev.dpOrders.map(o => o.id === id ? { ...o, ...data } : o),
-      transactions: prev.transactions.map(t => (t.relatedId === id && t.category === TransactionCategory.DEPOSIT) ? { ...t, amount: data.dpAmount ?? t.amount } : t)
-    }));
+    const updatedOrders = state.dpOrders.map(o => o.id === id ? { ...o, ...data } : o);
+    const updatedOrder = updatedOrders.find(o => o.id === id);
+    let updatedTransactions = [...state.transactions];
+    if (updatedOrder) {
+      updatedTransactions = updatedTransactions.map(t => {
+        if (t.relatedId === id && t.category === TransactionCategory.DEPOSIT) {
+          return { ...t, amount: updatedOrder.dpAmount, description: `DP ORDER: ${updatedOrder.customerName} (${updatedOrder.productName})`, createdAt: updatedOrder.createdAt || t.createdAt };
+        }
+        return t;
+      });
+    }
+
+    setState(prev => ({ ...prev, dpOrders: updatedOrders, transactions: updatedTransactions }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('dp_orders').update({ ...data }).eq('id', id),
+          supabase.from('transactions').upsert(updatedTransactions.filter(t => t.relatedId === id).map(t => ({...t, user_id: state.user.id})))
+        ]);
+      } catch (e) {
+        console.error("DP update cloud error:", e);
+      }
+    }
   };
 
   const completeDPOrder = async (id: string, customDate?: number, paymentMethod: 'CASH' | 'BANK' = 'CASH') => {
@@ -566,12 +829,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!order || order.status !== DPStatus.PENDING) return;
     const timestamp = customDate || Date.now();
     const remainingBalance = order.totalAmount - order.dpAmount;
-    
+    let updatedTransactions = state.transactions.map(t => t.relatedId === order.id && t.category === TransactionCategory.DEPOSIT ? { ...t, category: TransactionCategory.SALES, description: `PELUNASAN DP: ${order.customerName} (${order.productName})` } : t);
+    const pelunasanTx: Transaction = { id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.SALES, amount: remainingBalance, description: `PELUNASAN SISA ORDER: ${order.customerName} (${order.productName})`, createdAt: timestamp, relatedId: order.id, paymentMethod };
+    updatedTransactions.push(pelunasanTx);
     let needed = order.quantity;
     let totalCOGS = 0;
     let updatedBatches = [...state.batches];
     const relevant = updatedBatches.filter(b => b.productName === order.productName && b.stockType === StockType.FOR_SALE && b.currentQuantity > 0).sort((a, b) => a.createdAt - b.createdAt);
-    if (relevant.reduce((s, b) => s + b.currentQuantity, 0) < needed) return alert(`Stok tidak mencukupi.`);
+    
+    if (relevant.length === 0 || relevant.reduce((s, b) => s + b.currentQuantity, 0) < needed) return alert(`Stok ${order.productName} tidak mencukupi untuk menyelesaikan order ini.`);
     
     for (const batch of relevant) {
       if (needed <= 0) break;
@@ -581,104 +847,284 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       needed -= take;
       totalCOGS += take * batch.buyPrice;
     }
-
     const saleId = crypto.randomUUID();
     const sale: SaleRecord = { id: saleId, productName: order.productName, quantity: order.quantity, salePrice: order.totalAmount / order.quantity, totalRevenue: order.totalAmount, totalCOGS, createdAt: timestamp, related_order_id: order.id };
-    const pelunasanTx: Transaction = { id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.SALES, amount: remainingBalance, description: `PELUNASAN SISA ORDER: ${order.customerName} (${order.productName})`, createdAt: timestamp, relatedId: order.id, paymentMethod };
+    const updatedOrders = state.dpOrders.map(o => o.id === id ? { ...o, status: DPStatus.COMPLETED, completedAt: timestamp } : o);
+    
+    setState(prev => ({ ...prev, dpOrders: updatedOrders, sales: [...prev.sales, sale], transactions: updatedTransactions, batches: updatedBatches }));
 
-    setState(prev => ({
-      ...prev,
-      dpOrders: prev.dpOrders.map(o => o.id === id ? { ...o, status: DPStatus.COMPLETED, completedAt: timestamp } : o),
-      sales: [...prev.sales, sale],
-      transactions: [...prev.transactions.map(t => t.relatedId === order.id ? { ...t, category: TransactionCategory.SALES, description: `PELUNASAN DP: ${order.customerName}` } : t), pelunasanTx],
-      batches: updatedBatches
-    }));
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('dp_orders').update({ status: DPStatus.COMPLETED, completedAt: timestamp }).eq('id', id),
+          supabase.from('sales').insert({...sale, user_id: state.user.id}),
+          supabase.from('transactions').upsert(updatedTransactions.map(t => ({...t, user_id: state.user.id}))),
+          supabase.from('batches').upsert(updatedBatches.map(i => ({...i, user_id: state.user.id})))
+        ]);
+      } catch (e) {
+        console.error("DP complete cloud sync error:", e);
+      }
+    }
   };
 
   const cancelDPOrder = async (id: string, customDate?: number) => {
-    setState(prev => ({
-      ...prev,
-      dpOrders: prev.dpOrders.map(o => o.id === id ? { ...o, status: DPStatus.CANCELLED, completedAt: customDate || Date.now() } : o),
-      transactions: prev.transactions.map(t => t.relatedId === id ? { ...t, category: TransactionCategory.FORFEITED_DP, description: `DP HANGUS` } : t)
-    }));
+    const order = state.dpOrders.find(o => o.id === id);
+    if (!order || order.status !== DPStatus.PENDING) return;
+    const timestamp = customDate || Date.now();
+    const updatedTransactions = state.transactions.map(t => t.relatedId === order.id && t.category === TransactionCategory.DEPOSIT ? { ...t, category: TransactionCategory.FORFEITED_DP, description: `DP HANGUS: ${order.customerName} (${order.productName})` } : t);
+    const updatedOrders = state.dpOrders.map(o => o.id === id ? { ...o, status: DPStatus.CANCELLED, completedAt: timestamp } : o);
+    
+    setState(prev => ({ ...prev, dpOrders: updatedOrders, transactions: updatedTransactions }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('dp_orders').update({ status: DPStatus.CANCELLED, completedAt: timestamp }).eq('id', id),
+          supabase.from('transactions').upsert(updatedTransactions.map(t => ({...t, user_id: state.user.id})))
+        ]);
+      } catch (e) {
+        console.error("DP cancel cloud error:", e);
+      }
+    }
   };
 
   const deleteDPOrder = async (id: string) => {
     const order = state.dpOrders.find(o => o.id === id);
-    if (!order || order.status === DPStatus.COMPLETED) return;
+    if (!order) return;
+    if (order.status === DPStatus.COMPLETED) return alert("Gunakan menu Penjualan untuk membatalkan order yang sudah SELESAI agar stok dan omset kembali otomatis.");
     
-    if (isCloudReady && state.user && state.settings.useCloud) {
-       await supabase.from('dp_orders').delete().eq('id', id);
-       await supabase.from('transactions').delete().eq('relatedId', id);
-    }
     setState(prev => ({ ...prev, dpOrders: prev.dpOrders.filter(o => o.id !== id), transactions: prev.transactions.filter(t => t.relatedId !== id) }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('dp_orders').delete().eq('id', id),
+          supabase.from('transactions').delete().eq('relatedId', id)
+        ]);
+      } catch (e) {
+        console.error("DP delete cloud error:", e);
+      }
+    }
   };
 
   const addManualTransaction = async (data: Omit<Transaction, 'id' | 'createdAt'>, customDate?: number) => {
-    const newTx: Transaction = { ...data, id: crypto.randomUUID(), createdAt: customDate || Date.now() };
+    const timestamp = customDate || Date.now();
+    const newTx: Transaction = { ...data, id: crypto.randomUUID(), createdAt: timestamp };
+    
     setState(prev => ({ ...prev, transactions: [...prev.transactions, newTx] }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await supabase.from('transactions').insert({...newTx, user_id: state.user.id});
+      } catch (e) {
+        console.error("Manual tx cloud sync error:", e);
+      }
+    }
   };
 
   const updateTransaction = async (id: string, data: Partial<Transaction>) => {
-    setState(prev => ({ ...prev, transactions: prev.transactions.map(t => t.id === id ? { ...t, ...data } : t) }));
+    const updatedTransactions = state.transactions.map(t => t.id === id ? { ...t, ...data } : t);
+    setState(prev => ({ ...prev, transactions: updatedTransactions }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await supabase.from('transactions').update({ ...data }).eq('id', id);
+      } catch (e) {
+        console.error("Tx update cloud error:", e);
+      }
+    }
   };
 
   const deleteTransaction = async (id: string) => {
     const tx = state.transactions.find(t => t.id === id);
-    if (!tx || tx.relatedId) return alert("Hapus dari modul terkait!");
+    if (!tx) return;
+    if (tx.relatedId) {
+      let sourceModule = "Modul Terkait";
+      if (tx.category === TransactionCategory.STOCK_PURCHASE) sourceModule = "STOK";
+      if (tx.category === TransactionCategory.SALES) sourceModule = "PENJUALAN";
+      if (tx.category === TransactionCategory.PRODUCTION_COST) sourceModule = "PRODUKSI";
+      if (tx.category === TransactionCategory.DEPOSIT || tx.category === TransactionCategory.FORFEITED_DP) sourceModule = "ORDER DP";
+      if (tx.category === TransactionCategory.LOAN_PROCEEDS || tx.category === TransactionCategory.LOAN_REPAYMENT) sourceModule = "PINJAMAN";
+      if (tx.description.includes("BUNGA PINJAMAN")) sourceModule = "PINJAMAN";
+      
+      return alert(`Transaksi ini otomatis dibuat oleh modul [${sourceModule}]. Silahkan hapus dari menu [${sourceModule}] agar data stok dan keuangan tetap sinkron.`);
+    }
+    
+    setState(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== id) }));
 
     if (isCloudReady && state.user && state.settings.useCloud) {
-       await supabase.from('transactions').delete().eq('id', id);
+      try {
+        await supabase.from('transactions').delete().eq('id', id);
+      } catch (e) {
+        console.error("Tx delete cloud error:", e);
+      }
     }
-    setState(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== id) }));
   };
 
   const transferFunds = async (amount: number, from: 'CASH' | 'BANK', to: 'CASH' | 'BANK', note: string, customDate?: number) => {
     const timestamp = customDate || Date.now();
     const transferGroupId = crypto.randomUUID();
-    const outTx = { id: crypto.randomUUID(), type: TransactionType.CASH_OUT, category: TransactionCategory.TRANSFER, amount, description: `TRANSFER: ${from} -> ${to} (${note})`, createdAt: timestamp, paymentMethod: from, relatedId: transferGroupId };
-    const inTx = { id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.TRANSFER, amount, description: `TERIMA TRANSFER DARI ${from}`, createdAt: timestamp, paymentMethod: to, relatedId: transferGroupId };
+
+    const outTx: Transaction = {
+      id: crypto.randomUUID(),
+      type: TransactionType.CASH_OUT,
+      category: TransactionCategory.TRANSFER,
+      amount,
+      description: `TRANSFER: ${from} -> ${to}${note ? ` (${note})` : ''}`,
+      createdAt: timestamp,
+      paymentMethod: from,
+      relatedId: transferGroupId
+    };
+
+    const inTx: Transaction = {
+      id: crypto.randomUUID(),
+      type: TransactionType.CASH_IN,
+      category: TransactionCategory.TRANSFER,
+      amount,
+      description: `TERIMA TRANSFER DARI ${from}${note ? ` (${note})` : ''}`,
+      createdAt: timestamp,
+      paymentMethod: to,
+      relatedId: transferGroupId
+    };
+
     setState(prev => ({ ...prev, transactions: [...prev.transactions, outTx, inTx] }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('transactions').insert({...outTx, user_id: state.user.id}),
+          supabase.from('transactions').insert({...inTx, user_id: state.user.id})
+        ]);
+      } catch (e) {
+        console.error("Transfer cloud sync error:", e);
+      }
+    }
   };
 
   const addLoan = async (data: Omit<Loan, 'id' | 'createdAt' | 'remainingAmount'>, customDate?: number, paymentMethod: 'CASH' | 'BANK' = 'CASH') => {
     const timestamp = customDate || Date.now();
     const newLoan: Loan = { ...data, id: crypto.randomUUID(), remainingAmount: data.initialAmount, createdAt: timestamp };
     const tx: Transaction = { id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.LOAN_PROCEEDS, amount: data.initialAmount, description: `PENCAIRAN PINJAMAN: ${data.source}`, createdAt: timestamp, relatedId: newLoan.id, paymentMethod };
+    
     setState(prev => ({ ...prev, loans: [...prev.loans, newLoan], transactions: [...prev.transactions, tx] }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('loans').insert({...newLoan, user_id: state.user.id}),
+          supabase.from('transactions').insert({...tx, user_id: state.user.id})
+        ]);
+      } catch (e) {
+        console.error("Loan cloud sync error:", e);
+      }
+    }
   };
 
   const updateLoan = async (id: string, data: Partial<Loan>, paymentMethod?: 'CASH' | 'BANK', customDate?: number) => {
     const oldLoan = state.loans.find(l => l.id === id);
     if (!oldLoan) return;
-    const newInitial = data.initialAmount ?? oldLoan.initialAmount;
-    setState(prev => ({
-      ...prev,
-      loans: prev.loans.map(l => l.id === id ? { ...l, ...data, remainingAmount: l.remainingAmount + (newInitial - oldLoan.initialAmount), createdAt: customDate || l.createdAt } : l),
-      transactions: prev.transactions.map(t => (t.relatedId === id && t.category === TransactionCategory.LOAN_PROCEEDS) ? { ...t, amount: newInitial, paymentMethod: paymentMethod || t.paymentMethod } : t)
-    }));
+
+    const newInitial = data.initialAmount !== undefined ? data.initialAmount : oldLoan.initialAmount;
+    const diff = newInitial - oldLoan.initialAmount;
+    const newRemaining = oldLoan.remainingAmount + diff;
+    const newTimestamp = customDate || oldLoan.createdAt;
+
+    const updatedLoans = state.loans.map(l => l.id === id ? { 
+      ...l, 
+      ...data, 
+      remainingAmount: newRemaining,
+      createdAt: newTimestamp 
+    } : l);
+    
+    const updatedTransactions = state.transactions.map(t => {
+      if (t.relatedId === id && t.category === TransactionCategory.LOAN_PROCEEDS) {
+        return {
+          ...t,
+          amount: newInitial,
+          description: `PENCAIRAN PINJAMAN: ${data.source || oldLoan.source}`,
+          createdAt: newTimestamp,
+          paymentMethod: paymentMethod || t.paymentMethod
+        };
+      }
+      return t;
+    });
+
+    setState(prev => ({ ...prev, loans: updatedLoans, transactions: updatedTransactions }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('loans').update({ 
+            ...data, 
+            remainingAmount: newRemaining,
+            createdAt: newTimestamp 
+          }).eq('id', id),
+          supabase.from('transactions').update({ 
+            amount: newInitial, 
+            description: `PENCAIRAN PINJAMAN: ${data.source || oldLoan.source}`,
+            createdAt: newTimestamp,
+            paymentMethod: paymentMethod || 'CASH'
+          }).eq('relatedId', id).eq('category', TransactionCategory.LOAN_PROCEEDS)
+        ]);
+      } catch (e) {
+        console.error("Loan update cloud error:", e);
+      }
+    }
   };
 
   const repayLoan = async (loanId: string, principal: number, interest: number, customDate?: number, paymentMethod: 'CASH' | 'BANK' = 'CASH') => {
     const loan = state.loans.find(l => l.id === loanId);
     if (!loan) return;
     const timestamp = customDate || Date.now();
-    const newTx: Transaction[] = [];
-    if (principal > 0) newTx.push({ id: crypto.randomUUID(), type: TransactionType.CASH_OUT, category: TransactionCategory.LOAN_REPAYMENT, amount: principal, description: `PELUNASAN POKOK: ${loan.source}`, createdAt: timestamp, relatedId: loan.id, paymentMethod });
-    if (interest > 0) newTx.push({ id: crypto.randomUUID(), type: TransactionType.CASH_OUT, category: TransactionCategory.OPERATIONAL, amount: interest, description: `BUNGA PINJAMAN: ${loan.source}`, createdAt: timestamp, relatedId: loan.id, paymentMethod });
-    setState(prev => ({ ...prev, loans: prev.loans.map(l => l.id === loanId ? { ...l, remainingAmount: Math.max(0, l.remainingAmount - principal) } : l), transactions: [...prev.transactions, ...newTx] }));
+    const newTransactions: Transaction[] = [];
+    if (principal > 0) newTransactions.push({ id: crypto.randomUUID(), type: TransactionType.CASH_OUT, category: TransactionCategory.LOAN_REPAYMENT, amount: principal, description: `PELUNASAN POKOK: ${loan.source}`, createdAt: timestamp, relatedId: loan.id, paymentMethod });
+    if (interest > 0) newTransactions.push({ id: crypto.randomUUID(), type: TransactionType.CASH_OUT, category: TransactionCategory.OPERATIONAL, amount: interest, description: `BUNGA PINJAMAN: ${loan.source}`, createdAt: timestamp, relatedId: loan.id, paymentMethod });
+    const updatedLoans = state.loans.map(l => l.id === loanId ? { ...l, remainingAmount: Math.max(0, l.remainingAmount - principal) } : l);
+    
+    setState(prev => ({ ...prev, loans: updatedLoans, transactions: [...prev.transactions, ...newTransactions] }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('loans').update({ remainingAmount: Math.max(0, loan.remainingAmount - principal) }).eq('id', loanId),
+          supabase.from('transactions').insert(newTransactions.map(t => ({...t, user_id: state.user.id})))
+        ]);
+      } catch (e) {
+        console.error("Loan repay cloud error:", e);
+      }
+    }
   };
 
   const deleteLoan = async (id: string) => {
     const loan = state.loans.find(l => l.id === id);
-    if (!loan || loan.remainingAmount < loan.initialAmount) return alert("Hapus cicilan terlebih dahulu!");
+    if (!loan) return;
+    if (loan.remainingAmount < loan.initialAmount) return alert("Hutang yang sudah ada cicilan tidak bisa dihapus langsung. Hapus cicilan di riwayat terlebih dahulu.");
     
-    if (isCloudReady && state.user && state.settings.useCloud) {
-       await supabase.from('loans').delete().eq('id', id);
-       await supabase.from('transactions').delete().eq('relatedId', id);
-    }
     setState(prev => ({ ...prev, loans: prev.loans.filter(l => l.id !== id), transactions: prev.transactions.filter(t => t.relatedId !== id) }));
+
+    if (isCloudReady && state.user && state.settings.useCloud) {
+      try {
+        await Promise.all([
+          supabase.from('loans').delete().eq('id', id),
+          supabase.from('transactions').delete().eq('relatedId', id)
+        ]);
+      } catch (e) {
+        console.error("Loan delete cloud error:", e);
+      }
+    }
   };
+// ================= AUTO SYNC EFFECT =================
+useEffect(() => {
+  triggerAutoSync();
+}, [
+  state.batches,
+  state.productions,
+  state.productionUsages,
+  state.sales,
+  state.dpOrders,
+  state.loans,
+  state.transactions
+]);
 
   return (
     <AppContext.Provider value={{ 
