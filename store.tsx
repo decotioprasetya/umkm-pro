@@ -82,7 +82,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     else document.documentElement.classList.remove('dark');
   }, [state.batches, state.productions, state.productionUsages, state.sales, state.dpOrders, state.loans, state.transactions, state.settings]);
 
-  // Handle Auth Changes & Initial Session
+  // Handle Auth & Initial Session
   useEffect(() => {
     if (!isCloudReady) return;
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
@@ -129,20 +129,77 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isSyncing: false
       }));
     } catch (err) {
-      console.error("Cloud fetch error:", err);
+      console.error("Initial Cloud Fetch Failed:", err);
       setState(prev => ({ ...prev, isSyncing: false }));
     }
   }, []);
 
-  useEffect(() => { if (state.user) fetchFromCloud(); }, [state.user, fetchFromCloud]);
+  // --- REALTIME SYNC LOGIC ---
+  useEffect(() => {
+    if (!isCloudReady || !state.user || !state.settings.useCloud) return;
 
-  // Helper for REAL-TIME Auto Sync
+    fetchFromCloud(); // Initial fetch
+
+    // Setup Realtime Channel
+    const channel = supabase.channel('realtime_changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'batches' }, (payload) => {
+        handleRealtimeEvent('batches', payload);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales' }, (payload) => {
+        handleRealtimeEvent('sales', payload);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'productions' }, (payload) => {
+        handleRealtimeEvent('productions', payload);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'transactions' }, (payload) => {
+        handleRealtimeEvent('transactions', payload);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'dp_orders' }, (payload) => {
+        // Fix: Use correct AppState key 'dpOrders' instead of database table name 'dp_orders'
+        handleRealtimeEvent('dpOrders', payload);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'loans' }, (payload) => {
+        handleRealtimeEvent('loans', payload);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'production_usages' }, (payload) => {
+        handleRealtimeEvent('productionUsages', payload);
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [state.user, state.settings.useCloud]);
+
+  const handleRealtimeEvent = (key: keyof AppState, payload: any) => {
+    setState(prev => {
+      const existingData = (prev[key] as any[]) || [];
+      const { eventType, new: newRecord, old: oldRecord } = payload;
+
+      // Jangan proses jika record bukan milik user ini (Filter RLS di client side tambahan)
+      if (newRecord && newRecord.user_id && newRecord.user_id !== stateRef.current.user?.id) return prev;
+
+      let newData = [...existingData];
+
+      if (eventType === 'INSERT') {
+        if (!newData.some(r => r.id === newRecord.id)) {
+          newData.push(newRecord);
+        }
+      } else if (eventType === 'UPDATE') {
+        newData = newData.map(r => r.id === newRecord.id ? { ...r, ...newRecord } : r);
+      } else if (eventType === 'DELETE') {
+        newData = newData.filter(r => r.id !== oldRecord.id);
+      }
+
+      return { ...prev, [key]: newData };
+    });
+  };
+
+  // Helper for REAL-TIME Auto Push (Optimistic UI)
   const autoCloudSync = async (table: string, data: any, operation: 'insert' | 'update' | 'upsert' | 'delete' = 'insert', idField: string = 'id', idValue?: string) => {
     if (!isCloudReady || !stateRef.current.user || !stateRef.current.settings.useCloud) return;
     
-    // Set syncing state without blocking UI
     setState(prev => ({ ...prev, isSyncing: true }));
-    
     try {
       const userId = stateRef.current.user.id;
       const query = supabase.from(table);
@@ -175,8 +232,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     
     setState(prev => ({ ...prev, batches: [...prev.batches, newBatch], transactions: [...prev.transactions, newTx] }));
-    autoCloudSync('batches', newBatch);
-    autoCloudSync('transactions', newTx);
+    await Promise.all([
+      autoCloudSync('batches', newBatch),
+      autoCloudSync('transactions', newTx)
+    ]);
   };
 
   const updateBatch = async (id: string, data: Partial<Batch>) => {
@@ -257,15 +316,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       productionUsages: [...prev.productionUsages, ...usages]
     }));
     
-    autoCloudSync('batches', updatedBatches, 'upsert');
-    autoCloudSync('batches', resultBatch);
-    autoCloudSync('productions', updatedProd, 'upsert');
-    autoCloudSync('production_usages', usages);
+    await Promise.all([
+      autoCloudSync('batches', updatedBatches, 'upsert'),
+      autoCloudSync('batches', resultBatch),
+      autoCloudSync('productions', updatedProd, 'upsert'),
+      autoCloudSync('production_usages', usages)
+    ]);
   };
 
   const deleteProduction = async (id: string) => {
-    const prod = stateRef.current.productions.find(p => p.id === id);
-    if (!prod) return;
     setState(prev => ({ 
       ...prev, 
       productions: prev.productions.filter(p => p.id !== id),
@@ -306,9 +365,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const tx: Transaction = { id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.SALES, amount: sale.totalRevenue, description: `PENJUALAN: ${productName}${variantLabel ? ` (${variantLabel})` : ''}`, createdAt: timestamp, relatedId: saleId, paymentMethod };
     
     setState(prev => ({ ...prev, batches: updatedBatches, sales: [...prev.sales, sale], transactions: [...prev.transactions, tx] }));
-    autoCloudSync('batches', updatedBatches, 'upsert');
-    autoCloudSync('sales', sale);
-    autoCloudSync('transactions', tx);
+    await Promise.all([
+      autoCloudSync('batches', updatedBatches, 'upsert'),
+      autoCloudSync('sales', sale),
+      autoCloudSync('transactions', tx)
+    ]);
   };
 
   const deleteSale = async (id: string) => {
@@ -341,7 +402,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const deleteTransaction = async (id: string) => {
     const tx = stateRef.current.transactions.find(t => t.id === id);
-    if (tx?.relatedId) return alert("Transaksi otomatis tidak bisa dihapus langsung. Hapus dari modul terkait (Stok/Produksi/Jual).");
+    if (tx?.relatedId) return alert("Transaksi otomatis tidak bisa dihapus langsung.");
     setState(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== id) }));
     autoCloudSync('transactions', id, 'delete', 'id', id);
   };
@@ -406,8 +467,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const remaining = order.totalAmount - order.dpAmount;
     const tx: Transaction = { id: crypto.randomUUID(), type: TransactionType.CASH_IN, category: TransactionCategory.SALES, amount: remaining, description: `LUNAS DP: ${order.customerName}`, createdAt: timestamp, relatedId: order.id, paymentMethod };
     const updatedOrder = { ...order, status: DPStatus.COMPLETED, completedAt: timestamp };
-    
-    // Also run a sale record
     const sale: SaleRecord = { id: crypto.randomUUID(), productName: order.productName, quantity: order.quantity, salePrice: order.totalAmount / order.quantity, totalRevenue: order.totalAmount, totalCOGS: 0, createdAt: timestamp, related_order_id: order.id };
     
     setState(prev => ({ 
@@ -416,9 +475,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       transactions: [...prev.transactions, tx],
       sales: [...prev.sales, sale]
     }));
-    autoCloudSync('dp_orders', updatedOrder, 'upsert');
-    autoCloudSync('transactions', tx);
-    autoCloudSync('sales', sale);
+    await Promise.all([
+      autoCloudSync('dp_orders', updatedOrder, 'upsert'),
+      autoCloudSync('transactions', tx),
+      autoCloudSync('sales', sale)
+    ]);
   };
 
   const cancelDPOrder = async (id: string, customDate?: number) => {
@@ -435,7 +496,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     autoCloudSync('transactions', id, 'delete', 'relatedId', id);
   };
 
-  // Auth & Settings
   const signIn = async (email: string, pass: string) => {
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password: pass });
@@ -478,11 +538,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         autoCloudSync('loans', state.loans, 'upsert'),
         autoCloudSync('transactions', state.transactions, 'upsert')
       ]);
-      alert("Sync Berhasil!");
+      alert("Manual Sync Berhasil!");
     } finally { setState(prev => ({ ...prev, isSyncing: false })); }
   };
 
-  // Empty stubs for remaining interface requirements
   const updateProduction = async (id: string, data: Partial<ProductionRecord>) => {
     let updated: ProductionRecord | undefined;
     setState(prev => {
