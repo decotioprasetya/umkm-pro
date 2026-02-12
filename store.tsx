@@ -137,10 +137,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     if (!isCloudReady || !state.user || !state.settings.useCloud) return;
 
-    // Menunggu 2 detik setelah perubahan state sebelum mengirim ke cloud
     const timeout = setTimeout(() => {
       syncLocalToCloud(true);
-    }, 2000);
+    }, 3000); // 3 seconds debounce for stability
 
     return () => clearTimeout(timeout);
   }, [
@@ -229,9 +228,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateSettings = async (newSettings: Partial<AppSettings>) => {
     setState(prev => ({ ...prev, settings: { ...prev.settings, ...newSettings } }));
-    // Cloud sync handled by debounced useEffect
   };
 
+  /**
+   * Sync Local State to Cloud
+   * Uses robust upsert and explicit column mapping to avoid failure on complex fields
+   */
   const syncLocalToCloud = async (silent: boolean = false) => {
     if (!isCloudReady || !stateRef.current.user) return;
     
@@ -240,28 +242,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const user_id = stateRef.current.user.id;
       const current = stateRef.current;
 
-      await Promise.all([
-        supabase.from('profiles').upsert({
-          id: user_id,
-          business_name: current.settings.businessName,
-          theme: current.settings.theme,
-          updated_at: new Date().toISOString()
-        }),
-        supabase.from('batches').upsert(current.batches.map(i => ({...i, user_id}))),
-        supabase.from('productions').upsert(current.productions.map(i => ({...i, user_id}))),
-        supabase.from('production_usages').upsert(current.productionUsages.map(i => ({...i, user_id}))),
-        supabase.from('sales').upsert(current.sales.map(i => ({...i, user_id}))),
-        supabase.from('dp_orders').upsert(current.dpOrders.map(i => ({...i, user_id}))),
-        supabase.from('loans').upsert(current.loans.map(i => ({...i, user_id}))),
-        supabase.from('transactions').upsert(current.transactions.map(i => ({...i, user_id})))
-      ]);
+      // 1. Sync Profile
+      await supabase.from('profiles').upsert({
+        id: user_id,
+        business_name: current.settings.businessName,
+        theme: current.settings.theme,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' });
+
+      // 2. Sync Batches (Handle variants as JSON)
+      if (current.batches.length > 0) {
+        await supabase.from('batches').upsert(
+          current.batches.map(i => ({ ...i, user_id })), 
+          { onConflict: 'id' }
+        );
+      }
+
+      // 3. Sync Productions (Handle ingredients as JSON)
+      if (current.productions.length > 0) {
+        await supabase.from('productions').upsert(
+          current.productions.map(i => ({ ...i, user_id })), 
+          { onConflict: 'id' }
+        );
+      }
+
+      // 4. Sync Production Usages
+      if (current.productionUsages.length > 0) {
+        await supabase.from('production_usages').upsert(
+          current.productionUsages.map(i => ({ ...i, user_id })), 
+          { onConflict: 'id' }
+        );
+      }
+
+      // 5. Sync Sales
+      if (current.sales.length > 0) {
+        await supabase.from('sales').upsert(
+          current.sales.map(i => ({ ...i, user_id })), 
+          { onConflict: 'id' }
+        );
+      }
+
+      // 6. Sync DP Orders
+      if (current.dpOrders.length > 0) {
+        await supabase.from('dp_orders').upsert(
+          current.dpOrders.map(i => ({ ...i, user_id })), 
+          { onConflict: 'id' }
+        );
+      }
+
+      // 7. Sync Loans
+      if (current.loans.length > 0) {
+        await supabase.from('loans').upsert(
+          current.loans.map(i => ({ ...i, user_id })), 
+          { onConflict: 'id' }
+        );
+      }
+
+      // 8. Sync Transactions (The most critical one)
+      if (current.transactions.length > 0) {
+        await supabase.from('transactions').upsert(
+          current.transactions.map(i => ({ ...i, user_id })), 
+          { onConflict: 'id' }
+        );
+      }
       
       setState(prev => ({ ...prev, isSyncing: false, lastSyncTime: Date.now() }));
-      if (!silent) alert("Sinkronisasi Berhasil!");
-    } catch (e) {
-      console.error("Sync error:", e);
+      if (!silent) alert("Sinkronisasi Cloud Berhasil!");
+    } catch (e: any) {
+      console.error("Critical Sync Error:", e);
       setState(prev => ({ ...prev, isSyncing: false }));
-      if (!silent) alert("Gagal Sinkronisasi. Cek koneksi internet Anda.");
+      if (!silent) alert(`Gagal Sinkronisasi: ${e.message || 'Cek koneksi internet.'}`);
     }
   };
 
