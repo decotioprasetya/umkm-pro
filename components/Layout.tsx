@@ -105,7 +105,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab }) =>
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-[10px] font-black text-slate-900 dark:text-white truncate uppercase">Guest Mode</p>
-                  <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest truncate">Offline Mode</p>
+                  <p className="text-[8px] text-slate-400 font-bold uppercase tracking-widest truncate">Offline</p>
                 </div>
                 <button 
                   onClick={() => setActiveTab('login')}
@@ -151,7 +151,7 @@ const Layout: React.FC<LayoutProps> = ({ children, activeTab, setActiveTab }) =>
               <div className="flex items-center gap-1.5 mt-1">
                 <span className={`w-1.5 h-1.5 rounded-full ${state.user ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'}`}></span>
                 <p className="text-[9px] font-black text-slate-700 dark:text-slate-300 uppercase tracking-widest">
-                  {state.user ? 'Cloud Live' : 'Offline'}
+                  {state.user ? 'Live Cloud' : 'Offline'}
                 </p>
               </div>
             </div>
