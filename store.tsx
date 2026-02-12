@@ -1,5 +1,5 @@
 
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect } from 'react';
 import { supabase, isCloudReady } from './supabase';
 import { 
   AppState, Batch, ProductionRecord, SaleRecord, Transaction, 
@@ -46,11 +46,12 @@ interface AppContextType {
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
-const STORAGE_KEY = 'umkm_pro_data_v3';
+const STORAGE_KEY = 'umkm_pro_session_data';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AppState>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    // Menggunakan sessionStorage agar data otomatis terhapus saat tab ditutup
+    const saved = sessionStorage.getItem(STORAGE_KEY);
     const initialData = saved ? JSON.parse(saved) : {
       batches: [],
       productions: [],
@@ -71,7 +72,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   });
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, isSyncing: false, user: null }));
+    // Menyimpan ke sessionStorage (Data hilang saat tab ditutup)
+    sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ ...state, isSyncing: false, user: null }));
     if (state.settings.theme === 'dark') {
       document.documentElement.classList.add('dark');
     } else {
@@ -206,19 +208,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const runProduction = async (productName: string, quantity: number, ingredients: { productName: string, quantity: number }[], operationalCosts: { amount: number, description: string, paymentMethod: 'CASH' | 'BANK' }[], customDate?: number) => {
     const timestamp = customDate || Date.now();
     const productionId = crypto.randomUUID();
-    
-    // Alur baru: Tidak memotong stok bahan baku di awal, hanya mencatat rencana (planned ingredients).
-    // Hal ini memungkinkan input 0 di awal dan pengisian riil di akhir.
     const totalOpCost = operationalCosts.reduce((sum, c) => sum + c.amount, 0);
     
     const production: ProductionRecord = { 
       id: productionId, 
       outputProductName: productName, 
       outputQuantity: quantity, 
-      totalHPP: totalOpCost, // HPP awal hanya biaya operasional
+      totalHPP: totalOpCost, 
       createdAt: timestamp, 
       status: ProductionStatus.IN_PROGRESS,
-      ingredients: ingredients // Simpan rencana bahan
+      ingredients: ingredients
     };
     
     const newTx = operationalCosts.filter(c => c.amount > 0).map(c => ({
@@ -256,7 +255,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let totalMaterialCost = 0;
     const usages: ProductionUsage[] = [];
 
-    // Validasi & Potong Stok Bahan Baku Sekarang (FIFO)
     for (const ingredient of actualIngredients) {
       let needed = ingredient.quantity;
       if (needed <= 0) continue;
@@ -422,11 +420,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     let updatedBatches = [...state.batches];
 
-    // 1. "Undo" Penjualan Lama (Kembalikan Stok)
     let toRestore = oldSale.quantity;
     const sameProductBatches = updatedBatches
       .filter(b => b.productName === oldSale.productName && b.stockType === StockType.FOR_SALE)
-      .sort((a, b) => b.createdAt - a.createdAt); // LIFO restoration to preserve FIFO integrity
+      .sort((a, b) => b.createdAt - a.createdAt); 
 
     for (const batch of sameProductBatches) {
       if (toRestore <= 0) break;
@@ -448,7 +445,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
     }
 
-    // 2. "Redo" Penjualan dengan Data Baru (Gunakan FIFO Kembali)
     const newQty = data.quantity ?? oldSale.quantity;
     const newPrice = data.salePrice ?? oldSale.salePrice;
     const newVariant = data.variantLabel ?? oldSale.variantLabel;
@@ -459,9 +455,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let totalCOGS = 0;
     const relevantBatches = updatedBatches
       .filter(b => b.productName === newProduct && b.stockType === StockType.FOR_SALE && b.currentQuantity > 0)
-      .sort((a, b) => a.createdAt - b.createdAt); // FIFO
+      .sort((a, b) => a.createdAt - b.createdAt); 
 
-    // Cek kecukupan stok setelah undo
     const totalAvail = relevantBatches.reduce((sum, b) => {
       if (newVariant && b.variants) {
         return sum + (b.variants.find(v => v.label === newVariant)?.quantity || 0);
@@ -489,7 +484,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const bIdx = updatedBatches.findIndex(b => b.id === batch.id);
       updatedBatches[bIdx].currentQuantity -= take;
       if (newVariant && updatedBatches[bIdx].variants) {
-        // Fix: Use 'newVariant' instead of undefined 'variantLabel'
         const vIdx = updatedBatches[bIdx].variants!.findIndex(v => v.label === newVariant);
         if (vIdx !== -1) updatedBatches[bIdx].variants![vIdx].quantity -= take;
       }
@@ -497,7 +491,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       totalCOGS += take * batch.buyPrice;
     }
 
-    // 3. Update Record Penjualan & Transaksi Keuangan
     const updatedSale: SaleRecord = { 
       ...oldSale, 
       ...data, 
