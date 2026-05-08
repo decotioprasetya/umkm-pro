@@ -54,9 +54,66 @@ export const supabase = {
         error: null
       };
 
+    },
+
+    update: async () => {
+
+      return {
+        data: null,
+        error: null
+      };
+
+    },
+
+    delete: async () => {
+
+      return {
+        data: null,
+        error: null
+      };
+
+    },
+
+    eq: () => ({
+
+      single: async () => {
+
+        return {
+          data: null,
+          error: null
+        };
+
+      }
+
+    })
+
+  }),
+
+  auth: {
+
+    onAuthStateChange: () => {
+
+      return {
+        data: {
+          subscription: {
+            unsubscribe: () => {}
+          }
+        }
+      };
+
+    },
+
+    getSession: async () => {
+
+      return {
+        data: {
+          session: null
+        }
+      };
+
     }
 
-  })
+  }
 
 };
 
