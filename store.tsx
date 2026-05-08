@@ -51,7 +51,7 @@ const STORAGE_KEY = 'umkm_pro_session_data';
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [state, setState] = useState<AppState>(() => {
-    const saved = sessionStorage.getItem(STORAGE_KEY);
+    const saved = localStorage.getItem(STORAGE_KEY);
     const initialData = saved ? JSON.parse(saved) : {
       batches: [],
       productions: [],
@@ -124,7 +124,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   useEffect(() => {
     const { user, isSyncing, lastSyncTime, ...persistentState } = state;
-    sessionStorage.setItem(STORAGE_KEY, JSON.stringify(persistentState));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(persistentState));
     if (state.settings.theme === 'dark') document.documentElement.classList.add('dark');
     else document.documentElement.classList.remove('dark');
   }, [state.batches, state.productions, state.productionUsages, state.sales, state.dpOrders, state.loans, state.transactions, state.settings]);
@@ -174,7 +174,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev, user: null, batches: [], productions: [], productionUsages: [], 
       sales: [], dpOrders: [], loans: [], transactions: [], lastSyncTime: undefined 
     }));
-    sessionStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(STORAGE_KEY);
   };
 
   const syncLocalToCloud = async (silent: boolean = false) => {
